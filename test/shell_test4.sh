@@ -1,0 +1,2 @@
+var=$'\n'
+echo $var
