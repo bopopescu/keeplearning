@@ -16,7 +16,7 @@ login_pw = {
     "password": ""
 }
 
-page_num = 100
+page_num = 50
 
 def get_access_token():
     headers = {'content-type': 'application/json'}
@@ -26,17 +26,23 @@ def get_access_token():
     access_token = data_json.get("access_token")
     return access_token
 
-def get_host_ips(access_token):
+def get_host_ips(access_token, start_num=23):
     headers = {'Authorization': 'JWT %s'%access_token}
-    url_str = 'http://api.zoomeye.org/host/search?query="port:6379"&page=%s'
+    #url_str = 'http://api.zoomeye.org/host/search?query="port:6379"&page=%s'
+    url = 'http://api.zoomeye.org/host/search'
     with open('ip.txt', 'w') as file:
         file.truncate()
-    for i in range(page_num):
+    num = 0
+    for i in range(start_num, page_num):
         num = i + 1
-        url = url_str % num
-        print url
-        r = requests.get(url, headers=headers)
+        params = {
+                'query': 'port:6379',
+                'page': num
+            }
+        print url, params
+        #r = requests.get(url, headers=headers)
         try:
+            r = requests.get(url, params=params, headers=headers)
             data_json = r.json()
             match_list = data_json.get('matches', [])
             with open('ip.txt', 'a') as file:
@@ -46,9 +52,13 @@ def get_host_ips(access_token):
                     file.write(ip+'\n')
         except Exception, e:
             print e
-            print r.text
+            print r.text.encode('utf-8')
+            access_token = get_access_token()
+            get_host_ips(access_token, num)
+            break
+
+        time.sleep(3)
         
-        time.sleep(10)
 
 if __name__=='__main__':
     access_token = get_access_token()
