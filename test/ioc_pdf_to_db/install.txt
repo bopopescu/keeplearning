@@ -1,0 +1,2 @@
+ioc-parser==0.9.1
+mysql-connector==2.1.4
