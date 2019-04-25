@@ -11,7 +11,7 @@ class Actor(gevent.Greenlet):
 
     def __init__(self):
         self.inbox = Queue()
-        Greenlet.__init__(self)
+        super(Actor, self).__init__()
 
     def receive(self, message):
         raise NotImplemented()
@@ -21,7 +21,8 @@ class Actor(gevent.Greenlet):
 
         while self.running:
             message = self.inbox.get()
-            self.receive()
+            print "message: %s" % message
+            self.receive(message)
 
 
 class Pinger(Actor):
@@ -34,13 +35,15 @@ class Ponger(Actor):
     def receive(self, message):
         print(message)
         ping.inbox.put('pong')
-        gevent.sleep()
+        gevent.sleep(0)
 
 ping = Pinger()
 pong = Ponger()
 
 if __name__ == '__main__':
     ping.start()
-    ping.start()
-    ping.inbox.put('start')
+    pong.start()
+    ping.inbox.put('start-1')
+    # pong.inbox.put('start-2')
     gevent.joinall([ping, pong])
+    # print "bbbb"
