@@ -333,8 +333,8 @@ class MockEmrConnection(object):
 
     def run_jobflow(self,
                     name, log_uri, ec2_keyname=None, availability_zone=None,
-                    master_instance_type='m1.small',
-                    slave_instance_type='m1.small', num_instances=1,
+                    main_instance_type='m1.small',
+                    subordinate_instance_type='m1.small', num_instances=1,
                     action_on_failure='TERMINATE_JOB_FLOW', keep_alive=False,
                     enable_debugging=False,
                     hadoop_version=None,
@@ -391,9 +391,9 @@ class MockEmrConnection(object):
                     instancerequestcount='1',
                     instancerole='MASTER',
                     instancerunningcount='0',
-                    instancetype=master_instance_type,
+                    instancetype=main_instance_type,
                     market='ON_DEMAND',
-                    name='master',
+                    name='main',
                 ),
             ]
             if num_instances > 1:
@@ -402,16 +402,16 @@ class MockEmrConnection(object):
                         instancerequestcount=str(num_instances - 1),
                         instancerole='CORE',
                         instancerunningcount='0',
-                        instancetype=slave_instance_type,
+                        instancetype=subordinate_instance_type,
                         market='ON_DEMAND',
                         name='core',
                     ),
                 )
             else:
-                # don't display slave instance type if there are no slaves
-                slave_instance_type = None
+                # don't display subordinate instance type if there are no subordinates
+                subordinate_instance_type = None
         else:
-            slave_instance_type = None
+            subordinate_instance_type = None
             num_instances = 0
 
             mock_groups = []
@@ -464,13 +464,13 @@ class MockEmrConnection(object):
                     if instance_group.num_instances != 1:
                         raise boto.exception.EmrResponseError(
                             400, 'Bad Request', body=err_xml(
-                            'A master instance group must specify a single'
+                            'A main instance group must specify a single'
                             ' instance'))
 
-                    master_instance_type = instance_group.type
+                    main_instance_type = instance_group.type
 
                 elif instance_group.role == 'CORE':
-                    slave_instance_type = instance_group.type
+                    subordinate_instance_type = instance_group.type
                 mock_groups.append(emr_group)
                 num_instances += instance_group.num_instances
                 roles.add(instance_group.role)
@@ -484,8 +484,8 @@ class MockEmrConnection(object):
                 if 'MASTER' not in roles:
                     raise boto.exception.EmrResponseError(
                         400, 'Bad Request', body=err_xml(
-                        'Zero master instance groups supplied, you must'
-                        ' specify exactly one master instance group'))
+                        'Zero main instance groups supplied, you must'
+                        ' specify exactly one main instance group'))
 
         job_flow = MockEmrObject(
             availabilityzone=availability_zone,
@@ -498,8 +498,8 @@ class MockEmrConnection(object):
             jobflowid=jobflow_id,
             keepjobflowalivewhennosteps=('true' if keep_alive else 'false'),
             laststatechangereason='Provisioning Amazon EC2 capacity',
-            masterinstancetype=master_instance_type,
-            masterpublicdnsname='mockmaster',
+            maininstancetype=main_instance_type,
+            mainpublicdnsname='mockmain',
             name=name,
             normalizedinstancehours='9999',  # just need this filled in for now
             state='STARTING',
@@ -507,8 +507,8 @@ class MockEmrConnection(object):
             visible_to_all_users=visible_to_all_users
         )
 
-        if slave_instance_type is not None:
-            job_flow.slaveinstancetype = slave_instance_type
+        if subordinate_instance_type is not None:
+            job_flow.subordinateinstancetype = subordinate_instance_type
 
         # AMI version is only set when you specify it explicitly
         if ami_version is not None:

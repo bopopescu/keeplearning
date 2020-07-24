@@ -48,7 +48,7 @@ class PoolingToolTestCase(ToolTestCase):
              'ec2_instance_type': None,
              'ec2_key_pair': None,
              'ec2_key_pair_file': None,
-             'ec2_master_instance_type': None,
+             'ec2_main_instance_type': None,
              'emr_endpoint': None,
              'emr_job_flow_pool_name': None,
              'hadoop_version': None,

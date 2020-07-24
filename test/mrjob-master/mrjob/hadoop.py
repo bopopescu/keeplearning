@@ -300,7 +300,7 @@ class HadoopJobRunner(MRJobRunner):
 
             # try to use a PTY if it's available
             try:
-                pid, master_fd = pty.fork()
+                pid, main_fd = pty.fork()
             except (AttributeError, OSError):
                 # no PTYs, just use Popen
                 step_proc = Popen(streaming_args, stdout=PIPE, stderr=PIPE)
@@ -317,12 +317,12 @@ class HadoopJobRunner(MRJobRunner):
                 if pid == 0:  # we are the child process
                     os.execvp(streaming_args[0], streaming_args)
                 else:
-                    master = os.fdopen(master_fd)
-                    # reading from master gives us the subprocess's
+                    main = os.fdopen(main_fd)
+                    # reading from main gives us the subprocess's
                     # stderr and stdout (it's a fake terminal)
-                    self._process_stderr_from_streaming(master)
+                    self._process_stderr_from_streaming(main)
                     _, returncode = os.waitpid(pid, 0)
-                    master.close()
+                    main.close()
 
             if returncode == 0:
                 # parsing needs step number for whole job
@@ -509,9 +509,9 @@ class HadoopJobRunner(MRJobRunner):
         try:
             all_task_attempt_logs.extend(self._ls_logs('userlogs/'))
         except IOError:
-            # sometimes the master doesn't have these
+            # sometimes the main doesn't have these
             pass
-        # TODO: get these logs from slaves if possible
+        # TODO: get these logs from subordinates if possible
         task_attempt_logs = self._enforce_path_regexp(all_task_attempt_logs,
                                                       TASK_ATTEMPTS_LOG_URI_RE,
                                                       step_nums)

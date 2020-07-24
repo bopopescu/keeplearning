@@ -87,7 +87,7 @@ from mrjob.runner import MRJobRunner
 from mrjob.runner import RunnerOptionStore
 from mrjob.ssh import ssh_copy_key
 from mrjob.ssh import ssh_terminate_single_job
-from mrjob.ssh import ssh_slave_addresses
+from mrjob.ssh import ssh_subordinate_addresses
 from mrjob.ssh import SSH_PREFIX
 from mrjob.ssh import SSH_LOG_ROOT
 from mrjob.util import cmd_line
@@ -368,9 +368,9 @@ class EMRRunnerOptionStore(RunnerOptionStore):
         'ec2_instance_type',
         'ec2_key_pair',
         'ec2_key_pair_file',
-        'ec2_master_instance_bid_price',
-        'ec2_master_instance_type',
-        'ec2_slave_instance_type',
+        'ec2_main_instance_bid_price',
+        'ec2_main_instance_type',
+        'ec2_subordinate_instance_type',
         'ec2_task_instance_bid_price',
         'ec2_task_instance_type',
         'emr_endpoint',
@@ -417,7 +417,7 @@ class EMRRunnerOptionStore(RunnerOptionStore):
             'ami_version': 'latest',
             'check_emr_status_every': 30,
             'ec2_core_instance_type': 'm1.small',
-            'ec2_master_instance_type': 'm1.small',
+            'ec2_main_instance_type': 'm1.small',
             'emr_job_flow_pool_name': 'default',
             'hadoop_version': None,
             'hadoop_streaming_jar_on_emr':
@@ -440,21 +440,21 @@ class EMRRunnerOptionStore(RunnerOptionStore):
         command-line arguments to override defaults and arguments
         in mrjob.conf (see Issue #311).
 
-        Also, make sure that core and slave instance type are the same,
-        total number of instances matches number of master, core, and task
+        Also, make sure that core and subordinate instance type are the same,
+        total number of instances matches number of main, core, and task
         instances, and that bid prices of zero are converted to None.
         """
-        # Make sure slave and core instance type have the same value
+        # Make sure subordinate and core instance type have the same value
         # Within EMRJobRunner we only ever use ec2_core_instance_type,
-        # but we want ec2_slave_instance_type to be correct in the
+        # but we want ec2_subordinate_instance_type to be correct in the
         # options dictionary.
-        if (self['ec2_slave_instance_type'] and
-            (self._opt_priority['ec2_slave_instance_type'] >
+        if (self['ec2_subordinate_instance_type'] and
+            (self._opt_priority['ec2_subordinate_instance_type'] >
              self._opt_priority['ec2_core_instance_type'])):
             self['ec2_core_instance_type'] = (
-                self['ec2_slave_instance_type'])
+                self['ec2_subordinate_instance_type'])
         else:
-            self['ec2_slave_instance_type'] = (
+            self['ec2_subordinate_instance_type'] = (
                 self['ec2_core_instance_type'])
 
         # If task instance type is not set, use core instance type
@@ -466,11 +466,11 @@ class EMRRunnerOptionStore(RunnerOptionStore):
 
         # Within EMRJobRunner, we use num_ec2_core_instances and
         # num_ec2_task_instances, not num_ec2_instances. (Number
-        # of master instances is always 1.)
+        # of main instances is always 1.)
         if (self._opt_priority['num_ec2_instances'] >
             max(self._opt_priority['num_ec2_core_instances'],
                 self._opt_priority['num_ec2_task_instances'])):
-            # assume 1 master, n - 1 core, 0 task
+            # assume 1 main, n - 1 core, 0 task
             self['num_ec2_core_instances'] = (
                 self['num_ec2_instances'] - 1)
             self['num_ec2_task_instances'] = 0
@@ -493,19 +493,19 @@ class EMRRunnerOptionStore(RunnerOptionStore):
         # Allow ec2 instance type to override other instance types
         ec2_instance_type = self['ec2_instance_type']
         if ec2_instance_type:
-            # core (slave) instances
+            # core (subordinate) instances
             if (self._opt_priority['ec2_instance_type'] >
                 max(self._opt_priority['ec2_core_instance_type'],
-                    self._opt_priority['ec2_slave_instance_type'])):
+                    self._opt_priority['ec2_subordinate_instance_type'])):
                 self['ec2_core_instance_type'] = ec2_instance_type
-                self['ec2_slave_instance_type'] = ec2_instance_type
+                self['ec2_subordinate_instance_type'] = ec2_instance_type
 
-            # master instance only does work when it's the only instance
+            # main instance only does work when it's the only instance
             if (self['num_ec2_core_instances'] <= 0 and
                 self['num_ec2_task_instances'] <= 0 and
                 (self._opt_priority['ec2_instance_type'] >
-                 self._opt_priority['ec2_master_instance_type'])):
-                self['ec2_master_instance_type'] = ec2_instance_type
+                 self._opt_priority['ec2_main_instance_type'])):
+                self['ec2_main_instance_type'] = ec2_instance_type
 
             # task instances
             if (self._opt_priority['ec2_instance_type'] >
@@ -513,7 +513,7 @@ class EMRRunnerOptionStore(RunnerOptionStore):
                 self['ec2_task_instance_type'] = ec2_instance_type
 
         # convert a bid price of '0' to None
-        for role in ('core', 'master', 'task'):
+        for role in ('core', 'main', 'task'):
             opt_name = 'ec2_%s_instance_bid_price' % role
             if not self[opt_name]:
                 self[opt_name] = None
@@ -641,7 +641,7 @@ class EMRJobRunner(MRJobRunner):
         self._s3_job_log_uri = None
 
         # we'll create the script later
-        self._master_bootstrap_script_path = None
+        self._main_bootstrap_script_path = None
 
         # the ID assigned by EMR to this job (might be None)
         self._emr_job_flow_id = self._opts['emr_job_flow_id']
@@ -652,12 +652,12 @@ class EMRJobRunner(MRJobRunner):
         # ssh state
         self._ssh_proc = None
         self._gave_cant_ssh_warning = False
-        # we don't upload the ssh key to master until it's needed
+        # we don't upload the ssh key to main until it's needed
         self._ssh_key_is_copied = False
 
         # cache for SSH address
         self._address = None
-        self._ssh_slave_addrs = None
+        self._ssh_subordinate_addrs = None
 
         # store the tracker URL for completion status
         self._tracker_url = None
@@ -855,7 +855,7 @@ class EMRJobRunner(MRJobRunner):
 
         Tar up mrjob if bootstrap_mrjob is True.
 
-        Create the master bootstrap script if necessary.
+        Create the main bootstrap script if necessary.
         """
         # lazily create mrjob.tar.gz
         if self._opts['bootstrap_mrjob']:
@@ -868,10 +868,10 @@ class EMRJobRunner(MRJobRunner):
             self._upload_mgr.add(path)
 
         # now that we know where the above files live, we can create
-        # the master bootstrap script
-        self._create_master_bootstrap_script_if_needed()
-        if self._master_bootstrap_script_path:
-            self._upload_mgr.add(self._master_bootstrap_script_path)
+        # the main bootstrap script
+        self._create_main_bootstrap_script_if_needed()
+        if self._main_bootstrap_script_path:
+            self._upload_mgr.add(self._main_bootstrap_script_path)
 
         # finally, make sure bootstrap action scripts are on S3
         for bootstrap_action in self._bootstrap_actions:
@@ -907,7 +907,7 @@ class EMRJobRunner(MRJobRunner):
         running.
 
         Args:
-        host -- hostname of the EMR master node.
+        host -- hostname of the EMR main node.
         """
         REQUIRED_OPTS = ['ec2_key_pair', 'ec2_key_pair_file', 'ssh_bind_ports']
         for opt_name in REQUIRED_OPTS:
@@ -994,11 +994,11 @@ class EMRJobRunner(MRJobRunner):
         finally:
             random.setstate(random_state)
 
-    def _enable_slave_ssh_access(self):
+    def _enable_subordinate_ssh_access(self):
         if self._ssh_fs and not self._ssh_key_is_copied:
             ssh_copy_key(
                 self._opts['ssh_bin'],
-                self._address_of_master(),
+                self._address_of_main(),
                 self._opts['ec2_key_pair_file'],
                 self._ssh_key_name)
 
@@ -1069,7 +1069,7 @@ class EMRJobRunner(MRJobRunner):
                      'flow %s".' % self._emr_job_flow_id)
 
         try:
-            addr = self._address_of_master()
+            addr = self._address_of_main()
         except IOError:
             return
 
@@ -1134,9 +1134,9 @@ class EMRJobRunner(MRJobRunner):
         """Helper method for creating instance groups. For use when
         creating a jobflow using a list of InstanceGroups, instead
         of the typical triumverate of
-        num_instances/master_instance_type/slave_instance_type.
+        num_instances/main_instance_type/subordinate_instance_type.
 
-            - Role is either 'master', 'core', or 'task'.
+            - Role is either 'main', 'core', or 'task'.
             - instance_type is an EC2 instance type
             - count is an int
             - bid_price is a number, a string, or None. If None,
@@ -1158,7 +1158,7 @@ class EMRJobRunner(MRJobRunner):
             market = 'ON_DEMAND'
             bid_price = None
 
-        # Just name the groups "master", "task", and "core"
+        # Just name the groups "main", "task", and "core"
         name = role.lower()
 
         return boto.emr.instance_group.InstanceGroup(
@@ -1205,20 +1205,20 @@ class EMRJobRunner(MRJobRunner):
         # or bid prices
         if not (self._opts['num_ec2_task_instances'] or
                 self._opts['ec2_core_instance_bid_price'] or
-                self._opts['ec2_master_instance_bid_price'] or
+                self._opts['ec2_main_instance_bid_price'] or
                 self._opts['ec2_task_instance_bid_price']):
             args['num_instances'] = self._opts['num_ec2_core_instances'] + 1
-            args['master_instance_type'] = (
-                self._opts['ec2_master_instance_type'])
-            args['slave_instance_type'] = self._opts['ec2_core_instance_type']
+            args['main_instance_type'] = (
+                self._opts['ec2_main_instance_type'])
+            args['subordinate_instance_type'] = self._opts['ec2_core_instance_type']
         else:
             # Create a list of InstanceGroups
             args['instance_groups'] = [
                 self._create_instance_group(
                     'MASTER',
-                    self._opts['ec2_master_instance_type'],
+                    self._opts['ec2_main_instance_type'],
                     1,
-                    self._opts['ec2_master_instance_bid_price']
+                    self._opts['ec2_main_instance_bid_price']
                     ),
             ]
 
@@ -1251,18 +1251,18 @@ class EMRJobRunner(MRJobRunner):
                 boto.emr.BootstrapAction(
                 'action %d' % i, s3_uri, bootstrap_action['args']))
 
-        if self._master_bootstrap_script_path:
-            master_bootstrap_script_args = []
+        if self._main_bootstrap_script_path:
+            main_bootstrap_script_args = []
             if self._opts['pool_emr_job_flows']:
-                master_bootstrap_script_args = [
+                main_bootstrap_script_args = [
                     'pool-' + self._pool_hash(),
                     self._opts['emr_job_flow_pool_name'],
                 ]
             bootstrap_action_args.append(
                 boto.emr.BootstrapAction(
-                    'master',
-                    self._upload_mgr.uri(self._master_bootstrap_script_path),
-                    master_bootstrap_script_args))
+                    'main',
+                    self._upload_mgr.uri(self._main_bootstrap_script_path),
+                    main_bootstrap_script_args))
 
         if bootstrap_action_args:
             args['bootstrap_actions'] = bootstrap_action_args
@@ -1531,7 +1531,7 @@ class EMRJobRunner(MRJobRunner):
                         self._show_tracker_progress = False
                 # once a step is running, it's safe to set up the ssh tunnel to
                 # the job tracker
-                job_host = getattr(job_flow, 'masterpublicdnsname', None)
+                job_host = getattr(job_flow, 'mainpublicdnsname', None)
                 if job_host and self._opts['ssh_tunnel_to_job_tracker']:
                     self.setup_ssh_tunnel_to_job_tracker(job_host)
 
@@ -1612,24 +1612,24 @@ class EMRJobRunner(MRJobRunner):
     ## SSH LOG FETCHING
 
     def _ssh_path(self, relative):
-        return SSH_PREFIX + self._address_of_master() + SSH_LOG_ROOT + \
+        return SSH_PREFIX + self._address_of_main() + SSH_LOG_ROOT + \
         '/' + relative
 
     def _ls_ssh_logs(self, relative_path):
         """List logs over SSH by path relative to log root directory"""
         try:
-            self._enable_slave_ssh_access()
+            self._enable_subordinate_ssh_access()
             log.debug('Search %s for logs' % self._ssh_path(relative_path))
             return self.ls(self._ssh_path(relative_path))
         except IOError, e:
             raise LogFetchError(e)
 
-    def _ls_slave_ssh_logs(self, addr, relative_path):
+    def _ls_subordinate_ssh_logs(self, addr, relative_path):
         """List logs over multi-hop SSH by path relative to log root directory
         """
-        self._enable_slave_ssh_access()
+        self._enable_subordinate_ssh_access()
         root_path = '%s%s!%s%s' % (SSH_PREFIX,
-                                   self._address_of_master(),
+                                   self._address_of_main(),
                                    addr,
                                    SSH_LOG_ROOT + '/' + relative_path)
         log.debug('Search %s for logs' % root_path)
@@ -1640,39 +1640,39 @@ class EMRJobRunner(MRJobRunner):
         try:
             all_paths.extend(self._ls_ssh_logs('userlogs/'))
         except IOError:
-            # sometimes the master doesn't have these
+            # sometimes the main doesn't have these
             pass
         if not all_paths:
-            # get them from the slaves instead (takes a little longer)
+            # get them from the subordinates instead (takes a little longer)
             try:
-                for addr in self._addresses_of_slaves():
-                    logs = self._ls_slave_ssh_logs(addr, 'userlogs/')
+                for addr in self._addresses_of_subordinates():
+                    logs = self._ls_subordinate_ssh_logs(addr, 'userlogs/')
                     all_paths.extend(logs)
             except IOError:
-                # sometimes the slaves don't have them either
+                # sometimes the subordinates don't have them either
                 pass
         return self._enforce_path_regexp(all_paths,
                                          TASK_ATTEMPTS_LOG_URI_RE,
                                          step_nums)
 
     def ls_step_logs_ssh(self, step_nums):
-        self._enable_slave_ssh_access()
+        self._enable_subordinate_ssh_access()
         return self._enforce_path_regexp(
             self._ls_ssh_logs('steps/'),
             STEP_LOG_URI_RE,
             step_nums)
 
     def ls_job_logs_ssh(self, step_nums):
-        self._enable_slave_ssh_access()
+        self._enable_subordinate_ssh_access()
         return self._enforce_path_regexp(self._ls_ssh_logs('history/'),
                                          EMR_JOB_LOG_URI_RE,
                                          step_nums)
 
     def ls_node_logs_ssh(self):
-        self._enable_slave_ssh_access()
+        self._enable_subordinate_ssh_access()
         all_paths = []
-        for addr in self._addresses_of_slaves():
-            logs = self._ls_slave_ssh_logs(addr, '')
+        for addr in self._addresses_of_subordinates():
+            logs = self._ls_subordinate_ssh_logs(addr, '')
             all_paths.extend(logs)
         return self._enforce_path_regexp(all_paths, NODE_LOG_URI_RE)
 
@@ -1836,7 +1836,7 @@ class EMRJobRunner(MRJobRunner):
             lg_step_nums = step_nums
 
         try:
-            self._enable_slave_ssh_access()
+            self._enable_subordinate_ssh_access()
         except IOError, e:
             raise LogFetchError(e)
         task_attempt_logs = self.ls_task_attempt_logs_ssh(step_nums)
@@ -1863,13 +1863,13 @@ class EMRJobRunner(MRJobRunner):
 
     ### Bootstrapping ###
 
-    def _create_master_bootstrap_script_if_needed(self):
-        """Create the master bootstrap script and write it into our local
-        temp directory. Set self._master_bootstrap_script_path.
+    def _create_main_bootstrap_script_if_needed(self):
+        """Create the main bootstrap script and write it into our local
+        temp directory. Set self._main_bootstrap_script_path.
 
         This will do nothing if there are no bootstrap scripts or commands,
         or if it has already been called."""
-        if self._master_bootstrap_script_path:
+        if self._main_bootstrap_script_path:
             return
 
         # don't bother if we're not starting a job flow
@@ -1886,19 +1886,19 @@ class EMRJobRunner(MRJobRunner):
         # we call the script b.py because there's a character limit on
         # bootstrap script names (or there was at one time, anyway)
         path = os.path.join(self._get_local_tmp_dir(), 'b.py')
-        log.info('writing master bootstrap script to %s' % path)
+        log.info('writing main bootstrap script to %s' % path)
 
-        contents = self._master_bootstrap_script_content()
+        contents = self._main_bootstrap_script_content()
         for line in StringIO(contents):
             log.debug('BOOTSTRAP: ' + line.rstrip('\r\n'))
 
         with open(path, 'w') as f:
             f.write(contents)
 
-        self._master_bootstrap_script_path = path
+        self._main_bootstrap_script_path = path
 
-    def _master_bootstrap_script_content(self):
-        """Create the contents of the master bootstrap script.
+    def _main_bootstrap_script_content(self):
+        """Create the contents of the main bootstrap script.
         """
         out = StringIO()
 
@@ -2040,7 +2040,7 @@ class EMRJobRunner(MRJobRunner):
 
         We then sort by:
         - total compute units for core + task nodes
-        - total compute units for master node
+        - total compute units for main node
         - time left to an even instance hour
 
         The most desirable job flows come *last* in the list.
@@ -2061,9 +2061,9 @@ class EMRJobRunner(MRJobRunner):
         role_to_req_cu = {}
         role_to_req_bid_price = {}
 
-        for role in ('core', 'master', 'task'):
+        for role in ('core', 'main', 'task'):
             instance_type = self._opts['ec2_%s_instance_type' % role]
-            if role == 'master':
+            if role == 'main':
                 num_instances = 1
             else:
                 num_instances = self._opts['num_ec2_%s_instances' % role]
@@ -2140,7 +2140,7 @@ class EMRJobRunner(MRJobRunner):
                 role = ig.instancerole.lower()
 
                 # unknown, new kind of role; bail out!
-                if role not in ('core', 'master', 'task'):
+                if role not in ('core', 'main', 'task'):
                     return
 
                 req_instance_type = role_to_req_instance_type[role]
@@ -2197,7 +2197,7 @@ class EMRJobRunner(MRJobRunner):
 
             # make a sort key
             sort_key = (role_to_cu['core'] + role_to_cu['task'],
-                        role_to_cu['master'],
+                        role_to_cu['main'],
                         est_time_to_hour(job_flow))
 
             sort_keys_and_job_flows.append((sort_key, job_flow))
@@ -2349,9 +2349,9 @@ class EMRJobRunner(MRJobRunner):
                                               self._inferred_hadoop_version))
         return self._inferred_hadoop_version
 
-    def _address_of_master(self, emr_conn=None):
-        """Get the address of the master node so we can SSH to it"""
-        # cache address of master to avoid redundant calls to describe_jobflow
+    def _address_of_main(self, emr_conn=None):
+        """Get the address of the main node so we can SSH to it"""
+        # cache address of main to avoid redundant calls to describe_jobflow
         # also convenient for testing (pretend we can SSH when we really can't
         # by setting this to something not False)
         if self._address:
@@ -2361,7 +2361,7 @@ class EMRJobRunner(MRJobRunner):
             jobflow = self._describe_jobflow(emr_conn)
             if jobflow.state not in ('WAITING', 'RUNNING'):
                 raise IOError(
-                    'Cannot ssh to master; job flow is not waiting or running')
+                    'Cannot ssh to main; job flow is not waiting or running')
         except boto.exception.S3ResponseError:
             # This error is raised by some versions of boto when the jobflow
             # doesn't exist
@@ -2371,13 +2371,13 @@ class EMRJobRunner(MRJobRunner):
             # doesn't exist (some time before 2.4)
             raise IOError('Could not get job flow information')
 
-        self._address = jobflow.masterpublicdnsname
+        self._address = jobflow.mainpublicdnsname
         return self._address
 
-    def _addresses_of_slaves(self):
-        if not self._ssh_slave_addrs:
-            self._ssh_slave_addrs = ssh_slave_addresses(
+    def _addresses_of_subordinates(self):
+        if not self._ssh_subordinate_addrs:
+            self._ssh_subordinate_addrs = ssh_subordinate_addresses(
                 self._opts['ssh_bin'],
-                self._address_of_master(),
+                self._address_of_main(),
                 self._opts['ec2_key_pair_file'])
-        return self._ssh_slave_addrs
+        return self._ssh_subordinate_addrs

@@ -43,7 +43,7 @@ class SSHFilesystem(Filesystem):
         :param ssh_bin: path to ``ssh`` binary
         :param ec2_key_pair_file: path to an SSH keyfile
         :param key_name: Name of keyfile existing on servers, used to access
-                         slaves after '!' in hostname. Generally set by
+                         subordinates after '!' in hostname. Generally set by
                          :py:class:`~mrjob.emr.EMRJobRunner`, which copies the
                          key itself, to use for log fetching.
         """
@@ -94,7 +94,7 @@ class SSHFilesystem(Filesystem):
 
     def _cat_file(self, filename):
         ssh_match = SSH_URI_RE.match(filename)
-        addr = ssh_match.group('hostname') or self._address_of_master()
+        addr = ssh_match.group('hostname') or self._address_of_main()
         if '!' in addr and self.ssh_key_name is None:
             raise ValueError('ssh_key_name must not be None')
         output = ssh_cat(

@@ -68,7 +68,7 @@ def ssh_run(ssh_bin, address, ec2_key_pair_file, cmd_args, stdin=''):
     """Shortcut to call ssh on a Hadoop node via ``subprocess``.
 
     :param ssh_bin: Path to ``ssh`` binary
-    :param address: Address of your job's master node (obtained via
+    :param address: Address of your job's main node (obtained via
                     :py:meth:`boto.emr.EmrConnection.describe_jobflow`)
     :param ec2_key_pair_file: Path to the key pair file (argument to ``-i``)
     :param cmd_args: The command you want to run
@@ -84,8 +84,8 @@ def ssh_run(ssh_bin, address, ec2_key_pair_file, cmd_args, stdin=''):
 
 def ssh_run_with_recursion(ssh_bin, address, ec2_key_pair_file,
                             keyfile, cmd_args):
-    """Some files exist on the master and can be accessed directly via SSH,
-    but some files are on the slaves which can only be accessed via the master
+    """Some files exist on the main and can be accessed directly via SSH,
+    but some files are on the subordinates which can only be accessed via the main
     node. To differentiate between hosts, we adopt the UUCP "bang path" syntax
     to specify "SSH hops." Specifically, ``host1!host2`` forms the command to
     be run on ``host2``, then wraps that in a call to ``ssh`` from ``host``,
@@ -112,24 +112,24 @@ def ssh_run_with_recursion(ssh_bin, address, ec2_key_pair_file,
         return ssh_run(ssh_bin, address, ec2_key_pair_file, cmd_args)
 
 
-def ssh_copy_key(ssh_bin, master_address, ec2_key_pair_file, keyfile):
-    """Prepare master to SSH to slaves by copying the EMR private key to the
-    master node. This is done via ``cat`` to avoid having to store an
+def ssh_copy_key(ssh_bin, main_address, ec2_key_pair_file, keyfile):
+    """Prepare main to SSH to subordinates by copying the EMR private key to the
+    main node. This is done via ``cat`` to avoid having to store an
     ``scp_bin`` variable.
 
     :param ssh_bin: Path to ``ssh`` binary
-    :param master_address: Address of node to copy keyfile to
+    :param main_address: Address of node to copy keyfile to
     :param ec2_key_pair_file: Path to the key pair file (argument to ``-i``)
-    :param keyfile: What to call the key file on the master
+    :param keyfile: What to call the key file on the main
     """
     with open(ec2_key_pair_file, 'rb') as f:
         args = ['bash -c "cat > %s" && chmod 600 %s' % (keyfile, keyfile)]
-        check_output(*ssh_run(ssh_bin, master_address, ec2_key_pair_file, args,
+        check_output(*ssh_run(ssh_bin, main_address, ec2_key_pair_file, args,
                               stdin=f.read()))
 
 
-def ssh_slave_addresses(ssh_bin, master_address, ec2_key_pair_file):
-    """Get the IP addresses of the slave nodes. Fails silently because it
+def ssh_subordinate_addresses(ssh_bin, main_address, ec2_key_pair_file):
+    """Get the IP addresses of the subordinate nodes. Fails silently because it
     makes testing easier and if things are broken they will fail before this
     function is called.
     """
@@ -138,7 +138,7 @@ def ssh_slave_addresses(ssh_bin, master_address, ec2_key_pair_file):
 
     cmd = "hadoop dfsadmin -report | grep ^Name | cut -f2 -d: | cut -f2 -d' '"
     args = ['bash -c "%s"' % cmd]
-    ips = check_output(*ssh_run(ssh_bin, master_address, ec2_key_pair_file,
+    ips = check_output(*ssh_run(ssh_bin, main_address, ec2_key_pair_file,
                                 args))
     return [ip for ip in ips.split('\n') if ip]
 
@@ -148,12 +148,12 @@ def ssh_cat(ssh_bin, address, ec2_key_pair_file, path, keyfile=None):
     file doesn't exist or SSH access fails.
 
     :param ssh_bin: Path to ``ssh`` binary
-    :param address: Address of your job's master node (obtained via
+    :param address: Address of your job's main node (obtained via
                     :py:meth:`boto.emr.EmrConnection.describe_jobflow`)
     :param ec2_key_pair_file: Path to the key pair file (argument to ``-i``)
     :param path: Path on the remote host to get
-    :param keyfile: Name of the EMR private key file on the master node in case
-                    ``path`` exists on one of the slave nodes
+    :param keyfile: Name of the EMR private key file on the main node in case
+                    ``path`` exists on one of the subordinate nodes
     """
     out = check_output(*ssh_run_with_recursion(ssh_bin, address,
                                                ec2_key_pair_file,
@@ -169,12 +169,12 @@ def ssh_ls(ssh_bin, address, ec2_key_pair_file, path, keyfile=None):
     path doesn't exist or SSH access fails.
 
     :param ssh_bin: Path to ``ssh`` binary
-    :param address: Address of your job's master node (obtained via
+    :param address: Address of your job's main node (obtained via
                     :py:meth:`boto.emr.EmrConnection.describe_jobflow`)
     :param ec2_key_pair_file: Path to the key pair file (argument to ``-i``)
     :param path: Path on the remote host to list
-    :param keyfile: Name of the EMR private key file on the master node in case
-                    ``path`` exists on one of the slave nodes
+    :param keyfile: Name of the EMR private key file on the main node in case
+                    ``path`` exists on one of the subordinate nodes
     """
     out = check_output(*ssh_run_with_recursion(
         ssh_bin, address, ec2_key_pair_file, keyfile,
@@ -185,13 +185,13 @@ def ssh_ls(ssh_bin, address, ec2_key_pair_file, path, keyfile=None):
 
 
 def ssh_terminate_single_job(ssh_bin, address, ec2_key_pair_file):
-    """Terminate the only job running the Hadoop cluster with master node
+    """Terminate the only job running the Hadoop cluster with main node
     *address* using 'hadoop job -kill JOB_ID'. Return string output of command
     or None if there was no job to termiante. Raise :py:class:`IOError` if some
     other error occurred.
 
     :param ssh_bin: Path to ``ssh`` binary
-    :param address: Address of your job's master node (obtained via
+    :param address: Address of your job's main node (obtained via
                     :py:meth:`boto.emr.EmrConnection.describe_jobflow`)
     :param ec2_key_pair_file: Path to the key pair file (argument to ``-i``)
 
